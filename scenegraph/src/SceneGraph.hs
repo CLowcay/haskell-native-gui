@@ -1,4 +1,4 @@
-module HaskellNativeGui
+module SceneGraph
        ( someFunc
        ) where
 

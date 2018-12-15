@@ -1,5 +1,5 @@
 cabal-version:       2.0
-name:                haskell-native-gui
+name:                scenegraph
 version:             0.0.0
 synopsis:            See README for more info
 description:         See README for more info
@@ -22,7 +22,7 @@ source-repository head
 
 library
   hs-source-dirs:      src
-  exposed-modules:     HaskellNativeGui
+  exposed-modules:     SceneGraph
                        
 
   build-depends:       base ^>= 4.11.1.0
@@ -45,7 +45,7 @@ executable haskell-native-gui
   main-is:             Main.hs
 
   build-depends:       base ^>= 4.11.1.0
-                     , haskell-native-gui
+                     , scenegraph
                      
 
   ghc-options:         -Wall

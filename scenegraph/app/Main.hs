@@ -1,6 +1,6 @@
 module Main (main) where
 
-import HaskellNativeGui (someFunc)
+import SceneGraph (someFunc)
 
 
 main :: IO ()

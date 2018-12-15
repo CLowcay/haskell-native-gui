@@ -1,4 +1,7 @@
 resolver: lts-12.20
 
+packages:
+- scenegraph
+
 ghc-options:
   "$locals": -fhide-source-paths
