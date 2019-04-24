@@ -1,4 +1,4 @@
-name:                graphics-primitives
+name:                graphics-primitives-opengl
 version:             0.1.0.0
 github:              "CLowcay/haskell-native-gui"
 license:             BSD3
@@ -6,20 +6,22 @@ author:              "Callum Lowcay"
 maintainer:          "cwslowcay@gmail.com"
 copyright:           "2019 Callum Lowcay"
 
-extra-source-files:
-- README.md
-- ChangeLog.md
-
 description:         Please see the README on GitHub at <https://github.com/CLowcay/haskell-native-gui#readme>
 
 dependencies:
+- OpenGL >= 3.0 && < 3.1
+- StateVar >= 1.1 && < 1.2
 - base >= 4.7 && < 5
+- bytestring >= 0.10 && < 0.11
+- mtl >= 2.2.2 && < 2.3
+- sdl2 >= 2.4 && < 2.5
 
 library:
   source-dirs: src
+  ghc-options: -Wall
 
 executables:
-  graphics-primitives-exe:
+  example:
     main:                Main.hs
     source-dirs:         app
     ghc-options:
@@ -27,7 +29,7 @@ executables:
     - -rtsopts
     - -with-rtsopts=-N
     dependencies:
-    - graphics-primitives
+    - graphics-primitives-opengl
 
 tests:
   graphics-primitives-test:
@@ -38,4 +40,4 @@ tests:
     - -rtsopts
     - -with-rtsopts=-N
     dependencies:
-    - graphics-primitives
+    - graphics-primitives-opengl
