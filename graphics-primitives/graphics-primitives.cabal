@@ -4,9 +4,9 @@ cabal-version: 1.12
 --
 -- see: https://github.com/sol/hpack
 --
--- hash: 8a2dd7ffc5d47c163da5844e27dec5fc61cf7d14152e97305f25ad01f40b40c9
+-- hash: c59dd7c4466dac925612657ed87ced77e73f00237d98ff515b57b2c88a9d2e28
 
-name:           graphics-primitives-opengl
+name:           graphics-primitives
 version:        0.1.0.0
 description:    Please see the README on GitHub at <https://github.com/CLowcay/haskell-native-gui#readme>
 homepage:       https://github.com/CLowcay/haskell-native-gui#readme
@@ -23,52 +23,42 @@ source-repository head
 
 library
   exposed-modules:
-      Lib
+      Graphics.Primitives
+      Graphics.Primitives.Backend
+      Graphics.Primitives.Common
+      Graphics.Primitives.Scene
   other-modules:
-      Paths_graphics_primitives_opengl
+      Paths_graphics_primitives
   hs-source-dirs:
       src
   ghc-options: -Wall
   build-depends:
-      OpenGL >=3.0 && <3.1
-    , StateVar >=1.1 && <1.2
+      array >=0.5 && <0.6
     , base >=4.7 && <5
-    , bytestring >=0.10 && <0.11
+    , colour >=2.3 && <2.4
+    , containers >=0.6 && <0.7
+    , hashable >=1.2 && <1.3
     , mtl >=2.2.2 && <2.3
-    , sdl2 >=2.4 && <2.5
+    , unordered-containers >=0.2.9 && <0.3
   default-language: Haskell2010
 
-executable example
+test-suite graphics-primitives-test
+  type: exitcode-stdio-1.0
   main-is: Main.hs
   other-modules:
-      Paths_graphics_primitives_opengl
-  hs-source-dirs:
-      app
-  ghc-options: -threaded -rtsopts -with-rtsopts=-N
-  build-depends:
-      OpenGL >=3.0 && <3.1
-    , StateVar >=1.1 && <1.2
-    , base >=4.7 && <5
-    , bytestring >=0.10 && <0.11
-    , graphics-primitives-opengl
-    , mtl >=2.2.2 && <2.3
-    , sdl2 >=2.4 && <2.5
-  default-language: Haskell2010
-
-test-suite graphics-primitives-opengl-test
-  type: exitcode-stdio-1.0
-  main-is: Spec.hs
-  other-modules:
-      Paths_graphics_primitives_opengl
+      Graphics.Primitives.CommonSpec
+      Paths_graphics_primitives
   hs-source-dirs:
       test
   ghc-options: -threaded -rtsopts -with-rtsopts=-N
   build-depends:
-      OpenGL >=3.0 && <3.1
-    , StateVar >=1.1 && <1.2
+      array >=0.5 && <0.6
     , base >=4.7 && <5
-    , bytestring >=0.10 && <0.11
-    , graphics-primitives-opengl
+    , colour >=2.3 && <2.4
+    , containers >=0.6 && <0.7
+    , graphics-primitives
+    , hashable >=1.2 && <1.3
+    , hspec >=2.6 && <2.7
     , mtl >=2.2.2 && <2.3
-    , sdl2 >=2.4 && <2.5
+    , unordered-containers >=0.2.9 && <0.3
   default-language: Haskell2010
