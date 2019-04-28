@@ -35,12 +35,12 @@ import           Control.Monad.State.Strict
 import           Data.Array
 import           Data.Foldable
 import           Data.List
+import           Data.Maybe
 import           Data.Ord
 import           GHC.Generics
 import           Graphics.Primitives.Scene
 import qualified Data.IntMap.Strict            as M
 import qualified Data.Set                      as S
-import           Data.Maybe
 
 -- | Construct a path around the perimeter of a shape. The path is wound
 -- anticlockwise.
@@ -137,8 +137,10 @@ segmentsAdjacent (aStart, aEnd) (bStart, bEnd) =
 
 -- | Determine if a path intersects with itself
 intersectsWithSelf :: Path -> Bool
-intersectsWithSelf path = hasIntersection S.empty endPoints
+intersectsWithSelf path =
+  not (allUnique path) || hasIntersection S.empty endPoints
  where
+  allUnique l = length l == S.size (S.fromList l)
   endPoints =
     sortOn endPoint
       . concat
@@ -153,15 +155,17 @@ intersectsWithSelf path = hasIntersection S.empty endPoints
     (LeftSide , p, _) -> p
     (RightSide, _, p) -> p
 
-  intersectsNotAdjacent a b =
-    segmentsIntersect a b && not (segmentsAdjacent a b)
+  intersectsNotAdjacent (Segment a1 a2) (Segment b1 b2) =
+    let a = (a1, a2)
+        b = (b1, b2)
+    in  segmentsIntersect a b && not (segmentsAdjacent a b)
 
-  hasIntersection :: S.Set (Point, Point) -> [(Side, Point, Point)] -> Bool
+  hasIntersection :: S.Set Segment -> [(Side, Point, Point)] -> Bool
   hasIntersection _         []               = False
   hasIntersection sweepLine (segment : rest) = case segment of
     (LeftSide, start, end) ->
       let
-        thisSegment  = (start, end)
+        thisSegment  = Segment start end
         segmentAbove = S.lookupLT thisSegment sweepLine
         segmentBelow = S.lookupGT thisSegment sweepLine
         intersectsAbove =
@@ -174,7 +178,7 @@ intersectsWithSelf path = hasIntersection S.empty endPoints
         || hasIntersection (S.insert thisSegment sweepLine) rest
     (RightSide, start, end) ->
       let
-        thisSegment  = (start, end)
+        thisSegment  = Segment start end
         segmentAbove = S.lookupLT thisSegment sweepLine
         segmentBelow = S.lookupGT thisSegment sweepLine
         intersects =
@@ -184,6 +188,12 @@ intersectsWithSelf path = hasIntersection S.empty endPoints
             <*> segmentBelow
       in
         intersects || hasIntersection (S.delete thisSegment sweepLine) rest
+
+-- | A data type for line segments that are ordered from top to bottom
+data Segment = Segment !Point !Point deriving (Eq, Show)
+instance Ord Segment where
+  Segment (Point ax1 ay1) (Point ax2 ay2) <= Segment (Point bx1 by1) (Point bx2 by2)
+    = (Point ay1 ax1, Point ay2 ax2) <= (Point by1 bx1, Point by2 bx2)
 
 -- | Check if a polygon is simple and wound anticlockwise. These conditions are
 -- required by the 'triangulate' function.

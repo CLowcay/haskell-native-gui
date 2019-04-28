@@ -38,9 +38,10 @@ isValidTriangulation path triangles = do
 
 spec :: Spec
 spec = parallel $ do
-  describe "triangulate" triangulateSpec
-  describe "perimeter" perimeterSpec
-  describe "segmentsIntersect" segmentsIntersectSpec
+  describe "triangulate"        triangulateSpec
+  describe "perimeter"          perimeterSpec
+  describe "segmentsIntersect"  segmentsIntersectSpec
+  describe "intersectsWithSelf" intersectsWithSelfSpec
   describe "windingDirection" $ do
     it "detects a clockwise polygon"
       $          windingDirection [Point 0 0, Point 1 0, Point 1 1, Point 0 1]
@@ -50,45 +51,71 @@ spec = parallel $ do
       `shouldBe` CCW
 
 segmentsIntersectSpec :: Spec
-segmentsIntersectSpec = do 
-    it "detects a simple intersection"
-      $ segmentsIntersect (Point (-1) 0, Point 1 0) (Point 0 (-1), Point 0 1)
-      `shouldBe` True
-    it "detects touching line segments"
-      $          segmentsIntersect (Point 0 0, Point 2 2) (Point 1 1, Point 3 1)
-      `shouldBe` True
-    it "detects touching line segments (left)"
-      $          segmentsIntersect (Point (-2) (-2), Point (-2) 2)
-                                   (Point (-2) 0   , Point 0 0)
-      `shouldBe` True
-    it "detects touching line segments (right)"
-      $ segmentsIntersect (Point 0 (-4), Point 4 (-4)) (Point 4 0, Point 4 (-8))
-      `shouldBe` True
-    it "detects colinear lines"
-      $ segmentsIntersect (Point 0 0, Point 10 10) (Point 2 2, Point 6 6)
-      `shouldBe` True
-    it "detects colinear lines reverse"
-      $ segmentsIntersect (Point 10 0, Point 0 10) (Point 6 4, Point 4 6)
-      `shouldBe` True
-    it "detects duplicate lines"
-      $ segmentsIntersect (Point 0 0, Point 10 10) (Point 10 10, Point 0 0)
-      `shouldBe` True
-    it "ignores parallel lines" $ do
-      segmentsIntersect (Point 0 0, Point 10 10) (Point 0 1, Point 10 11)
-        `shouldBe` False
-      segmentsIntersect (Point 0 0, Point 10 10) (Point 10 0, Point 20 10)
-        `shouldBe` False
-      segmentsIntersect (Point 0 0, Point 0 5) (Point 4 6, Point 4 7)
-        `shouldBe` False
-    it "ignores non-intersecting segments of intersecting lines"
-      $          segmentsIntersect (Point 0 0, Point 0 2) (Point 4 4, Point 6 4)
+segmentsIntersectSpec = do
+  it "detects a simple intersection"
+    $ segmentsIntersect (Point (-1) 0, Point 1 0) (Point 0 (-1), Point 0 1)
+    `shouldBe` True
+  it "detects touching line segments"
+    $          segmentsIntersect (Point 0 0, Point 2 2) (Point 1 1, Point 3 1)
+    `shouldBe` True
+  it "detects touching line segments (left)"
+    $          segmentsIntersect (Point (-2) (-2), Point (-2) 2)
+                                 (Point (-2) 0   , Point 0 0)
+    `shouldBe` True
+  it "detects touching line segments (right)"
+    $ segmentsIntersect (Point 0 (-4), Point 4 (-4)) (Point 4 0, Point 4 (-8))
+    `shouldBe` True
+  it "detects colinear lines"
+    $          segmentsIntersect (Point 0 0, Point 10 10) (Point 2 2, Point 6 6)
+    `shouldBe` True
+  it "detects colinear lines reverse"
+    $          segmentsIntersect (Point 10 0, Point 0 10) (Point 6 4, Point 4 6)
+    `shouldBe` True
+  it "detects duplicate lines"
+    $ segmentsIntersect (Point 0 0, Point 10 10) (Point 10 10, Point 0 0)
+    `shouldBe` True
+  it "ignores parallel lines" $ do
+    segmentsIntersect (Point 0 0, Point 10 10) (Point 0 1, Point 10 11)
       `shouldBe` False
-    it "ignores almost intersecting segments of intersecting lines"
-      $          segmentsIntersect (Point 0 0, Point 2 2) (Point 1 4, Point 4 0)
+    segmentsIntersect (Point 0 0, Point 10 10) (Point 10 0, Point 20 10)
       `shouldBe` False
-    it "ignores non-overlapping segments of co-linear lines"
-      $          segmentsIntersect (Point 0 0, Point 2 2) (Point 4 4, Point 6 6)
+    segmentsIntersect (Point 0 0, Point 0 5) (Point 4 6, Point 4 7)
       `shouldBe` False
+  it "ignores non-intersecting segments of intersecting lines"
+    $          segmentsIntersect (Point 0 0, Point 0 2) (Point 4 4, Point 6 4)
+    `shouldBe` False
+  it "ignores almost intersecting segments of intersecting lines"
+    $          segmentsIntersect (Point 0 0, Point 2 2) (Point 1 4, Point 4 0)
+    `shouldBe` False
+  it "ignores non-overlapping segments of co-linear lines"
+    $          segmentsIntersect (Point 0 0, Point 2 2) (Point 4 4, Point 6 6)
+    `shouldBe` False
+
+intersectsWithSelfSpec :: Spec
+intersectsWithSelfSpec = do
+  it "detects a simple polygon"
+    $          intersectsWithSelf christmasTree
+    `shouldBe` False
+  it "detects a self intersecting polygon"
+    $          intersectsWithSelf
+                 [Point 0 1, Point 1 0, Point 3 2, Point 4 1, Point 3 0, Point 1 2]
+    `shouldBe` True
+  it "detects a polygon with a point touching a line"
+    $ intersectsWithSelf [Point 0 0, Point 3 0, Point 2 1, Point 2 0, Point 1 1]
+    `shouldBe` True
+  it "detects a polygon with a point touching a line on the left"
+    $ intersectsWithSelf [Point 0 0, Point 1 0, Point 0 1, Point 1 2, Point 0 2]
+    `shouldBe` True
+  it "detects a polygon with a point touching a line on the right"
+    $ intersectsWithSelf [Point 0 0, Point 1 0, Point 1 2, Point 0 2, Point 1 1]
+    `shouldBe` True
+  it "detects a polygon with two points touching"
+    $          intersectsWithSelf
+                 [Point 1 0, Point 2 0, Point 2 1, Point 1 0, Point 1 1, Point 0 1]
+    `shouldBe` True
+  it "detects a polygon with overlapping line segments"
+    $ intersectsWithSelf [Point 0 0, Point 0 1, Point 1 1, Point 1 0, Point 0 0]
+    `shouldBe` True
 
 perimeterSpec :: Spec
 perimeterSpec = do
@@ -188,19 +215,7 @@ triangulateSpec = do
                  ]
     `shouldBe` [(3, 5, 0), (1, 3, 0), (4, 5, 3), (1, 2, 3)]
   it "triangulates a christmas tree"
-    $          triangulate
-                 [ Point 4 0
-                 , Point 2 1
-                 , Point 3 1
-                 , Point 1 2
-                 , Point 2 2
-                 , Point 0 3
-                 , Point 8 3
-                 , Point 6 2
-                 , Point 7 2
-                 , Point 5 1
-                 , Point 6 1
-                 ]
+    $          triangulate christmasTree
     `shouldBe` [ (4, 2 , 3)
                , (2, 0 , 1)
                , (9, 10, 0)
@@ -256,3 +271,20 @@ triangulateSpec = do
   it "triangulates a rounded rectangle"
     $ let shape = perimeter $ RoundedRectangle (Size 40 20) 5
       in  isValidTriangulation shape $ triangulate shape
+
+-- A figure of a Christmas tree. Lots of spikes on the left and right, so a good
+-- work-out for the triangulate function.
+christmasTree :: Path
+christmasTree =
+  [ Point 4 0
+  , Point 2 1
+  , Point 3 1
+  , Point 1 2
+  , Point 2 2
+  , Point 0 3
+  , Point 8 3
+  , Point 6 2
+  , Point 7 2
+  , Point 5 1
+  , Point 6 1
+  ]
