@@ -1,4 +1,4 @@
-{-# LANGUAGE GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE RecordWildCards #-}
 
 -- |
@@ -11,22 +11,36 @@
 -- This module contains common geometric operations that might be shared among
 -- backends.
 module Graphics.Primitives.Common
-  ( perimeter
+  (
+  -- * Path operations
+    perimeter
+  , isValidSimplePolygon
   , Triangle
   , triangulate
+  -- * Utilities
+  -- | Some useful geometric operations.
+  , Side(..)
+  , whichSide
+  , WindingDirection(..)
+  , windingDirection
+  , segmentsIntersect
+  , segmentsAdjacent
+  , intersectsWithSelf
   )
 where
 
+import           Control.Applicative
 import           Control.Exception
 import           Control.Monad.State.Strict
-import           Control.Applicative
 import           Data.Array
 import           Data.Foldable
 import           Data.List
 import           Data.Ord
-import           Debug.Trace
+import           GHC.Generics
 import           Graphics.Primitives.Scene
 import qualified Data.IntMap.Strict            as M
+import qualified Data.Set                      as S
+import           Data.Maybe
 
 -- | Construct a path around the perimeter of a shape. The path is wound
 -- anticlockwise.
@@ -41,19 +55,19 @@ perimeter (Elipse (Size w h)) =
   in  (\theta -> Point (rx + rx * cos theta) (ry - ry * sin theta))
         .   (* stepSize)
         .   fromIntegral
-        <$> [0 .. (nSteps * 2)]
+        <$> [0 .. nSteps * 2 - 1]
 perimeter (RoundedRectangle (Size w h) r0) = if r0 < 1
   then perimeter $ Rectangle (Size w h)
   else
     let
       r                   = r0 `min` (w / 2) `min` (h / 2)
       nIntermediatePoints = floor r - 2 :: Int
-      stepSize            = pi / (2 * fromIntegral nIntermediatePoints)
+      stepSize            = pi / (2 * (1 + fromIntegral nIntermediatePoints))
       intermediatePoints =
         (\theta -> (r * cos theta, r * sin theta))
           .   (* stepSize)
           .   fromIntegral
-          <$> [0 .. nIntermediatePoints - 1]
+          <$> [1 .. nIntermediatePoints]
       lowerLeft (a, b) = Point (r - a) (h - r + b)
       lowerRight (a, b) = Point (w - r + a) (h - r + b)
       upperRight (a, b) = Point (w - r + a) (r - b)
@@ -70,21 +84,128 @@ perimeter (RoundedRectangle (Size w h) r0) = if r0 < 1
          : (upperLeft <$> reverse intermediatePoints)
          )
 
+-- | The direction in which a polygon is wound.
+data WindingDirection = CW   -- ^ Clockwise winding.
+                      | CCW  -- ^ Counter-clockwise (anticlockwise) winding.
+                      deriving (Eq, Ord, Show, Bounded, Enum, Generic)
+
+-- | Determine the winding direction of a polygon.
+windingDirection :: Path -> WindingDirection
+windingDirection path =
+  if sum (zipWith signedArea path $ drop 1 (cycle path)) > -2e-300
+    then CCW
+    else CW
+  where signedArea (Point ax ay) (Point bx by) = (ay + by) * (bx - ax)
+
+-- | Which side of a line a point is on.
+data Side = LeftSide | RightSide deriving (Eq, Ord, Show, Bounded, Enum)
+
+-- | Give three points a, b, and c, determine which side of the line directed
+-- from a to b does c fall on. Returns 'Nothing' if the three points are
+-- co-linear.
+whichSide :: Point -> Point -> Point -> Maybe Side
+whichSide (Point x1 y1) (Point x2 y2) (Point x y) =
+  let det     = (x - x1) * (y2 - y1) - (y - y1) * (x2 - x1)
+      epsilon = 2e-300
+  in  if det > epsilon
+        then Just LeftSide
+        else if det < -epsilon then Just RightSide else Nothing
+
+-- | Determine if two line segments intersect.
+segmentsIntersect :: (Point, Point) -> (Point, Point) -> Bool
+segmentsIntersect (a1, a2) (b1, b2) =
+  boundingBoxesOverlap
+    && fromMaybe True ((/=) <$> whichSide a1 a2 b1 <*> whichSide a1 a2 b2)
+    && fromMaybe True ((/=) <$> whichSide b1 b2 a1 <*> whichSide b1 b2 a2)
+ where
+  boundingBoxesOverlap =
+    let
+      Point ax1 ay1 = a1
+      Point ax2 ay2 = a2
+      Point bx1 by1 = b1
+      Point bx2 by2 = b2
+      sort2 (a, b) = if a <= b then (a, b) else (b, a)
+      rangesOverlap (p1, p2) (p3, p4) = if p1 <= p3 then p3 <= p2 else p1 <= p4
+    in
+      rangesOverlap (sort2 (ax1, ax2)) (sort2 (bx1, bx2))
+        && rangesOverlap (sort2 (ay1, ay2)) (sort2 (by1, by2))
+
+-- | Determine if two line segments are adjacent.
+segmentsAdjacent :: (Point, Point) -> (Point, Point) -> Bool
+segmentsAdjacent (aStart, aEnd) (bStart, bEnd) =
+  aStart == bEnd || aStart == bStart || aEnd == bStart || aEnd == bEnd
+
+-- | Determine if a path intersects with itself
+intersectsWithSelf :: Path -> Bool
+intersectsWithSelf path = hasIntersection S.empty endPoints
+ where
+  endPoints =
+    sortOn endPoint
+      . concat
+      $ zipWith
+          (\p1 p2 -> if p1 <= p2
+            then [(LeftSide, p1, p2), (RightSide, p1, p2)]
+            else [(LeftSide, p2, p1), (RightSide, p2, p1)]
+          )
+          path
+      $ drop 1 (cycle path)
+  endPoint segment = case segment of
+    (LeftSide , p, _) -> p
+    (RightSide, _, p) -> p
+
+  intersectsNotAdjacent a b =
+    segmentsIntersect a b && not (segmentsAdjacent a b)
+
+  hasIntersection :: S.Set (Point, Point) -> [(Side, Point, Point)] -> Bool
+  hasIntersection _         []               = False
+  hasIntersection sweepLine (segment : rest) = case segment of
+    (LeftSide, start, end) ->
+      let
+        thisSegment  = (start, end)
+        segmentAbove = S.lookupLT thisSegment sweepLine
+        segmentBelow = S.lookupGT thisSegment sweepLine
+        intersectsAbove =
+          maybe False (intersectsNotAdjacent thisSegment) segmentAbove
+        intersectsBelow =
+          maybe False (intersectsNotAdjacent thisSegment) segmentBelow
+      in
+        intersectsAbove
+        || intersectsBelow
+        || hasIntersection (S.insert thisSegment sweepLine) rest
+    (RightSide, start, end) ->
+      let
+        thisSegment  = (start, end)
+        segmentAbove = S.lookupLT thisSegment sweepLine
+        segmentBelow = S.lookupGT thisSegment sweepLine
+        intersects =
+          fromMaybe False
+            $   intersectsNotAdjacent
+            <$> segmentAbove
+            <*> segmentBelow
+      in
+        intersects || hasIntersection (S.delete thisSegment sweepLine) rest
+
+-- | Check if a polygon is simple and wound anticlockwise. These conditions are
+-- required by the 'triangulate' function.
+isValidSimplePolygon :: Path -> Bool
+isValidSimplePolygon path =
+  windingDirection path == CCW && not (intersectsWithSelf path)
+
 -- | A triangle formed from the vertices of a path, represented as indices into
 -- the path.
 type Triangle = (Int, Int, Int)
 
--- | Triangulate a polygon described by a Path. If the Path has less than 3
--- vertices then return an empty triangulation. Returns triples of indexes into
--- the path, each triple representing one of the triangles.
+-- | Triangulate a simple polygon described by a 'Path'. The path must be
+-- validated by 'isValidSimplePolygon', otherwise 'triangulate' will return
+-- incorrect results or throw an exception. If the path has less than 3 vertices
+-- then return an empty triangulation.
 triangulate :: Path -> [Triangle]
 triangulate []        = []
 triangulate [_]       = []
 triangulate [_, _]    = []
 triangulate [_, _, _] = [(0, 1, 2)]
-triangulate path      = traceShow ("--start--", path) $ concat $ evalState
-  (traverse doTriangulation sortedPoints)
-  initState
+triangulate path      = concat
+  $ evalState (traverse doTriangulation sortedPoints) initState
  where
   -- The initial state includes a diagonal from the last vertex back to the
   -- start. This simplifies the windPolygon function.
@@ -99,20 +220,23 @@ triangulate path      = traceShow ("--start--", path) $ concat $ evalState
   -- Determine if a point is inside a trapezoid.
   isInsideTrapezoid :: Point -> Trapezoid -> Bool
   isInsideTrapezoid (Point x y) Trapezoid {..} =
-    let Point x0 _    = indexedPath ! tStart
-        (start1, _)   = geoSort (prev tSegment1, next tSegment1)
-        (start2, _)   = geoSort (prev tSegment2, next tSegment2)
-        Point ax0 ay0 = indexedPath ! start1
-        Point ax1 ay1 = indexedPath ! tSegment1
-        Point bx0 by0 = indexedPath ! start2
-        Point bx1 by1 = indexedPath ! tSegment2
-        p1            = (ax1 - ax0) / (x - ax0)
-        p2            = (bx1 - bx0) / (x - bx0)
-        yb1           = (ay1 - ay0) * p1 + ay0
-        yb2           = (by1 - by0) * p2 + by0
-    in  assert (x >= x0 && x <= ax1 && x <= bx1)
-          $  (yb1 <= y && y <= yb2)
-          || (yb2 <= y && y <= yb1)
+    let
+      Point x0 _ = indexedPath ! tStart
+      leftMost   = minimumBy (comparing (indexedPath !))
+      Point ax0 ay0 =
+        indexedPath ! leftMost [prev tSegment1, next tSegment1, tStart]
+      Point ax1 ay1 = indexedPath ! tSegment1
+      Point bx0 by0 =
+        indexedPath ! leftMost [prev tSegment2, next tSegment2, tStart]
+      Point bx1 by1 = indexedPath ! tSegment2
+      p1            = (x - ax0) / (ax1 - ax0)
+      p2            = (x - bx0) / (bx1 - bx0)
+      ya            = (ay1 - ay0) * p1 + ay0
+      yb            = (by1 - by0) * p2 + by0
+    in
+      assert (x >= x0 && x <= ax1 && x <= bx1)
+      $  (ya < y && y < yb)
+      || (yb < y && y < ya)
 
   -- Get and remove the trapezoid that this point is inside of, or return
   -- Nothing if there is no such trapezoid.
@@ -130,33 +254,35 @@ triangulate path      = traceShow ("--start--", path) $ concat $ evalState
   -- then return an empty list.
   closeTrapezoid :: Trapezoid -> Int -> State Trapezoidation [(Int, Point)]
   closeTrapezoid Trapezoid {..} i = if hasDiagonal tStart i
-    then traceShow ("HAS DIAG", tStart, i) $ pure []
+    then pure []
     else do
-      traceShow ("NO DIAG", tStart, i) $ pure ()
-      addDiagonal tStart i
-      windPolygon tStart i
+      let (d1, d2) = sortVertical (tStart, i)
+      addDiagonal d2 d1
+      windPolygon d2 d1
 
-  -- Given a line segment on the lower right hand side of a polygon, extract the
-  -- polygon by walking around its perimeter.
+  -- Given a line segment directed anticlockwise, extract the polygon by walking
+  -- around its perimeter.
   windPolygon :: Int -> Int -> State Trapezoidation [(Int, Point)]
-  windPolygon d1 d2 = do
-    -- Walk the line segment bottom to top.
-    let (i1, i0) = sortVertical (d1, d2)
-    traceShow ("WIND", i0, i1) $ pure ()
-
+  windPolygon i0 i1 = do
     allDiagonals <- gets diagonals
-    let
-      winding = flip unfoldr i0 $ \i ->
-        -- Choose the next point that gets us back to i0 the fastest. This
-        -- will give the smallest possible polygon while maintaining
-        -- anticlockwise winding.
-        let
-          i2 =
-            minimumBy (comparing $ \d -> (i0 - d + pathLength) `mod` pathLength)
-              $ next i
-              : M.findWithDefault [] i allDiagonals
-        in  if i2 == i0 then Nothing else Just ((i2, indexedPath ! i2), i2)
-    pure $ (i0, indexedPath ! i0) : (i1, indexedPath ! i1) : winding
+    let closestToi0 =
+          minimumBy (comparing $ \d -> (i0 - d + pathLength) `mod` pathLength)
+    let nextCandidates i = next i : M.findWithDefault [] i allDiagonals
+
+    -- Make sure we have at least 3 distinct points.
+    let i2 = closestToi0 . filter (/= i0) $ nextCandidates i1
+
+    let winding = flip unfoldr i2 $ \i ->
+          -- Choose the next point that gets us back to i0 the fastest. This
+          -- will give the smallest possible polygon while maintaining
+          -- anticlockwise winding.
+          let i3 = closestToi0 $ nextCandidates i
+          in  if i3 == i0 then Nothing else Just ((i3, indexedPath ! i3), i3)
+    pure
+      $ (i0, indexedPath ! i0)
+      : (i1, indexedPath ! i1)
+      : (i2, indexedPath ! i2)
+      : winding
 
   -- Sort two vertices in order of their y coordinates.
   sortVertical :: (Int, Int) -> (Int, Int)
@@ -173,11 +299,7 @@ triangulate path      = traceShow ("--start--", path) $ concat $ evalState
   -- Triangulate up to the given vertex.
   doTriangulation :: Int -> State Trapezoidation [Triangle]
   doTriangulation i = do
-    state1 <- get
-    traceShow ("triangulate", i, state1) $pure ()
     allTrapezoids <- getTrapezoids i
-    state2        <- get
-    traceShow ("trapsRemoved", i, state2) $pure ()
     case allTrapezoids of
       [] -> do
         mtz <- getEnclosingTrapezoid (indexedPath ! i)
@@ -241,8 +363,9 @@ triangulate path      = traceShow ("--start--", path) $ concat $ evalState
               -- Handle the degenerate case where tSegment1 == tSegment2.
               -- Attempt to close the current polygon first, then wind up the
               -- final polygon.
-              sequence
-                [closeTrapezoid tz1 i, windPolygon (tStart tz1) (tSegment1 tz1)]
+              let (d1, d2) = (tStart tz1, tSegment1 tz1)
+              let (i0, i1) = if next d1 == d2 then (d1, d2) else (d2, d1)
+              sequence [closeTrapezoid tz1 i, windPolygon i0 i1]
 
           tooManyTrapezoids -> do
             s <- get
@@ -260,8 +383,6 @@ triangulate path      = traceShow ("--start--", path) $ concat $ evalState
                  unitonePolygons
             )
           $ pure ()
-
-        traceShow ("unitone: ", i, unitonePolygons) $ pure ()
 
         -- Triangulate the polygons.
         pure
@@ -331,8 +452,6 @@ data Trapezoid = Trapezoid {
   , tSegment2 :: !Int  -- ^ The second terminating vertex.
 } deriving (Eq, Ord, Show)
 
-data Side = LeftSide | RightSide deriving (Eq, Ord, Show, Bounded, Enum)
-
 -- | Triangulate a uni-monotone polygon. The input points are augmented with
 -- their indices in the original path.
 triangulateUnitone :: [(Int, Point)] -> [Triangle]
@@ -341,9 +460,7 @@ triangulateUnitone [_]                      = assert False []
 triangulateUnitone [_, _]                   = assert False []
 triangulateUnitone [(a, _), (b, _), (c, _)] = [(a, b, c)]
 triangulateUnitone path =
-  let (stack, triangles) =
-          traceShow (path, v0, v1, crown, turnDirection)
-            $ mapAccumL clipEars [v0] crown
+  let (stack, triangles) = mapAccumL clipEars [v0] crown
   in  concat triangles ++ fanLeftOvers stack
  where
   xcoord (Point x _) = x
@@ -352,8 +469,18 @@ triangulateUnitone path =
   iv0 = fst . minimumBy (comparing $ xcoord . snd . snd) $ [0 ..] `zip` path
 
   -- Index of v1 in the oriented path.
-  iv1 =
-    fst . maximumBy (comparing $ xcoord . snd . snd) $ [0 ..] `zip` orientedPath
+  maxXcoord = maximum $ xcoord . snd <$> orientedPath
+  iv1
+    | (xcoord . snd . head $ orientedPath) == maxXcoord
+    = 0
+    | (xcoord . snd . last $ orientedPath) == maxXcoord
+    = length orientedPath - 1
+    | otherwise
+    = error
+      $  "v0 and v1 are not adjacent, this is not a unitone polygon: "
+      ++ show path
+      ++ " "
+      ++ show (v0 : orientedPath)
 
   -- The oriented path is a rotation of the original path with v0 as the first
   -- vertex.
@@ -363,21 +490,11 @@ triangulateUnitone path =
   -- The direction we have to turn in to get an ear. If the crown is above the
   -- line v0-v1 then the winding direction is to the right. If the crown is
   -- below the line v0-v1 then the winding direction is to the left.
-  turnDirection
-    | iv1 == 0
-    = RightSide
-    | iv1 == length orientedPath - 1
-    = LeftSide
-    | otherwise
-    = error
-      $  "v0 and v1 are not adjacent, this is not a unitone polygon: "
-      ++ show path
-      ++ " "
-      ++ show (v0 : orientedPath)
+  turnDirection     = if iv1 == 0 then RightSide else LeftSide
 
   -- The crown always runs from left to right, even if that is counter to the
   -- original winding order.
-  crown = case turnDirection of
+  crown             = case turnDirection of
     LeftSide  -> init orientedPath
     RightSide -> reverse $ tail orientedPath
 
@@ -403,16 +520,7 @@ triangulateUnitone path =
           else (stack, acc)
 
   isEar :: Point -> Point -> Point -> Bool
-  isEar = onSide turnDirection
-
-  -- Determine if a point is on the specified side of the oriented line defined
-  -- by the first two points.
-  onSide :: Side -> Point -> Point -> Point -> Bool
-  onSide side (Point x1 y1) (Point x2 y2) (Point x y) =
-    let det = (x - x1) * (y2 - y1) - (y - y1) * (x2 - x1)
-    in  traceShow ("isEar", (x1, y1), (x2, y2), (x, y), det) $ case side of
-          RightSide -> det < 0
-          LeftSide  -> det > 0
+  isEar a b c = whichSide a b c == Just turnDirection
 
   -- Given the left over stack when ear-clipping is complete, create a fan of
   -- triangles centred on v1.
@@ -424,7 +532,7 @@ triangulateUnitone path =
       ++ " "
       ++ show (v0 : orientedPath)
   fanLeftOvers stack =
-    let makeTriangle (a, b) = (fst v1, fst a, fst b)
+    let makeTriangle a b = (fst v1, fst a, fst b)
     in  case turnDirection of
-          LeftSide  -> fmap makeTriangle $ drop 1 stack `zip` stack
-          RightSide -> fmap makeTriangle $ stack `zip` drop 1 stack
+          LeftSide  -> zipWith makeTriangle (drop 1 stack) stack
+          RightSide -> zipWith makeTriangle stack (drop 1 stack)
