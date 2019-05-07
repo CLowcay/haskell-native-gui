@@ -61,12 +61,12 @@ data Stop colour = Stop !Double !colour deriving (Eq, Ord, Show, Generic, Hashab
 -- | A shape.
 data Shape = Rectangle !Size                -- ^ A rectangle.
            | RoundedRectangle !Size !Radius -- ^ A rounded rectangle.
-           | Elipse !Size                   -- ^ An elipse.
-           | Polygon !Path                  -- ^ A closed polygon.  The path must be wound anticlockwise.
+           | Ellipse !Size                  -- ^ An ellipse.
+           | Polygon !Path                  -- ^ A closed polygon.  The path must be wound anticlockwise and it must not intersect itself.
            deriving (Eq, Ord, Show, Generic, Hashable)
 
 -- | A fill for a shape.
-data Paint = Solid !(LRGBA Double)                 -- ^ A solid color fill.
+data Paint = Solid !(LRGBA Double)                 -- ^ A solid colour fill.
            | Gradient !Angle [Stop (LRGBA Double)] -- ^ A gradient fill.
            deriving (Eq, Ord, Show, Generic, Hashable)
 

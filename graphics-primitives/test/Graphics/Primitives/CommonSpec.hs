@@ -37,7 +37,7 @@ isValidTriangulation path triangles = do
   forM_ triangles (`shouldSatisfy` isValidTriangle)
 
 spec :: Spec
-spec = parallel $ do
+spec = do
   describe "triangulate"        triangulateSpec
   describe "perimeter"          perimeterSpec
   describe "segmentsIntersect"  segmentsIntersectSpec
@@ -142,10 +142,10 @@ perimeterSpec = do
   it "creates a valid perimeter for an elipse"
     $ isValidPerimeter
     $ perimeter
-    $ Elipse (Size 10 5)
+    $ Ellipse (Size 10 5)
   it "creates a valid perimeter for a circle" $ do
-    isValidPerimeter $ perimeter $ Elipse (Size 10 10)
-    length (perimeter $ Elipse (Size 10 10)) `shouldBe` 20
+    isValidPerimeter $ perimeter $ Ellipse (Size 10 10)
+    length (perimeter $ Ellipse (Size 10 10)) `shouldBe` 20
 
 triangulateSpec :: Spec
 triangulateSpec = do
@@ -158,9 +158,9 @@ triangulateSpec = do
     `shouldBe` [(0, 1, 2)]
   it "triangulates non-rectilinear quadrilaterals" $ do
     triangulate [Point 0 0, Point (-1) 0.5, Point (-0.5) 1, Point 1 0.5]
-      `shouldBe` [(2, 0, 1), (3, 0, 2)]
+      `shouldBe` [(2, 0, 1), (2, 3, 0)]
     triangulate [Point (-0.5) 1, Point 1 0.5, Point 0 0, Point (-1) 0.5]
-      `shouldBe` [(0, 2, 3), (1, 2, 0)]
+      `shouldBe` [(0, 2, 3), (0, 1, 2)]
     triangulate [Point 0 0, Point (-1) 0.5, Point 0.5 1, Point 1 0.5]
       `shouldBe` [(2, 0, 1), (2, 3, 0)]
     triangulate [Point 0.5 1, Point 1 0.5, Point 0 0, Point (-1) 0.5]
@@ -170,7 +170,7 @@ triangulateSpec = do
     `shouldBe` [(2, 0, 1), (2, 3, 0)]
   it "triangulates a rectangle"
     $          triangulate [Point 0 0, Point 0 1, Point 1 1, Point 1 0]
-    `shouldBe` [(1, 3, 0), (2, 3, 1)]
+    `shouldBe` [(1, 3, 0), (1, 2, 3)]
   it "triangulates a uni-monotone quadrilateral" $ do
     let points = [Point 0 1, Point 3 1, Point 2 0, Point 1 0]
     triangulate points `shouldBe` [(0, 2, 3), (1, 2, 0)]
@@ -194,16 +194,16 @@ triangulateSpec = do
     `shouldBe` [(2, 0, 1), (2, 3, 0)]
   it "triangulates a polygon with a horizontal concavity on the left"
     $          triangulate [Point 0 0, Point 0.5 1, Point 0 2, Point 1 1]
-    `shouldBe` [(1, 3, 0), (3, 1, 2)]
+    `shouldBe` [(1, 3, 0), (2, 3, 1)]
   it "triangulates a polygon with a horizontal concavity on the right"
     $          triangulate [Point 0 1, Point 1 2, Point 0.5 1, Point 1 0]
-    `shouldBe` [(2, 3, 0), (1, 2, 0)]
+    `shouldBe` [(2, 3, 0), (0, 1, 2)]
   it "triangulates a polygon with one complex concavity on the upper right"
     $ triangulate [Point 0 1, Point 1.5 2, Point 3 1.8, Point 1 1, Point 2 0]
     `shouldBe` [(1, 3, 0), (3, 4, 0), (1, 2, 3)]
   it "triangulates a polygon with one complex concavity on the lower right"
     $ triangulate [Point 0 1, Point 2 2, Point 1 1, Point 3 0.8, Point 1.5 0]
-    `shouldBe` [(2, 4, 0), (1, 2, 0), (3, 4, 2)]
+    `shouldBe` [(2, 4, 0), (0, 1, 2), (2, 3, 4)]
   it "triangulates a polygon with two complex concavities on the right"
     $          triangulate
                  [ Point 0   1
@@ -213,7 +213,7 @@ triangulateSpec = do
                  , Point 1.5 0.5
                  , Point 1   0
                  ]
-    `shouldBe` [(3, 5, 0), (1, 3, 0), (4, 5, 3), (1, 2, 3)]
+    `shouldBe` [(3, 5, 0), (1, 3, 0), (3, 4, 5), (1, 2, 3)]
   it "triangulates a christmas tree"
     $          triangulate christmasTree
     `shouldBe` [ (4, 2 , 3)
@@ -258,7 +258,7 @@ triangulateSpec = do
                  , Point 5 1
                  , Point 6 0
                  ]
-    `shouldBe` [ (1, 2, 0)
+    `shouldBe` [ (0, 1, 2)
                , (0, 2, 4)
                , (2, 3, 4)
                , (0, 4, 6)
@@ -266,7 +266,7 @@ triangulateSpec = do
                , (7, 0, 6)
                ]
   it "triangulates a circle"
-    $ let shape = perimeter . Elipse $ Size 5 5
+    $ let shape = perimeter . Ellipse $ Size 5 5
       in  isValidTriangulation shape $ triangulate shape
   it "triangulates a rounded rectangle"
     $ let shape = perimeter $ RoundedRectangle (Size 40 20) 5

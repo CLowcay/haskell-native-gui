@@ -1,4 +1,5 @@
 {-# LANGUAGE DeriveGeneric #-}
+{-# LANGUAGE MultiWayIf #-}
 {-# LANGUAGE RecordWildCards #-}
 
 -- |
@@ -39,7 +40,8 @@ import           Data.Maybe
 import           Data.Ord
 import           GHC.Generics
 import           Graphics.Primitives.Scene
-import qualified Data.IntMap.Strict            as M
+import qualified Data.IntMap.Strict            as IM
+import qualified Data.Map.Strict               as M
 import qualified Data.Set                      as S
 
 -- | Construct a path around the perimeter of a shape. The path is wound
@@ -47,7 +49,7 @@ import qualified Data.Set                      as S
 perimeter :: Shape -> Path
 perimeter (Rectangle (Size w h)) = [Point 0 0, Point 0 h, Point w h, Point w 0]
 perimeter (Polygon   path      ) = path
-perimeter (Elipse (Size w h)) =
+perimeter (Ellipse (Size w h)) =
   let nSteps   = floor (w `min` h) :: Int
       stepSize = pi / fromIntegral nSteps
       rx       = w / 2
@@ -99,6 +101,17 @@ windingDirection path =
 
 -- | Which side of a line a point is on.
 data Side = LeftSide | RightSide deriving (Eq, Ord, Show, Bounded, Enum)
+
+-- | A data type for line segments that are ordered from top to bottom
+data Segment = Segment !Point !Point deriving (Eq, Show)
+instance Ord Segment where
+  Segment a1@(Point ax1 _) a2 <= Segment b1@(Point bx1 _) b2 = if ax1 <= bx1
+    then case whichSide a1 a2 b1 of
+      Just side -> side == RightSide
+      Nothing   -> whichSide a1 a2 b2 /= Just LeftSide
+    else case whichSide b1 b2 a1 of
+      Just side -> side == LeftSide
+      Nothing   -> whichSide b1 b2 a2 == Just LeftSide
 
 -- | Give three points a, b, and c, determine which side of the line directed
 -- from a to b does c fall on. Returns 'Nothing' if the three points are
@@ -189,12 +202,6 @@ intersectsWithSelf path =
       in
         intersects || hasIntersection (S.delete thisSegment sweepLine) rest
 
--- | A data type for line segments that are ordered from top to bottom
-data Segment = Segment !Point !Point deriving (Eq, Show)
-instance Ord Segment where
-  Segment (Point ax1 ay1) (Point ax2 ay2) <= Segment (Point bx1 by1) (Point bx2 by2)
-    = (Point ay1 ax1, Point ay2 ax2) <= (Point by1 bx1, Point by2 bx2)
-
 -- | Check if a polygon is simple and wound anticlockwise. These conditions are
 -- required by the 'triangulate' function.
 isValidSimplePolygon :: Path -> Bool
@@ -205,6 +212,27 @@ isValidSimplePolygon path =
 -- the path.
 type Triangle = (Int, Int, Int)
 
+-- | Internal state for our triangulation algorithm. The algorithm is
+-- triangulation by trapezoid decomposition. This is a scan-line algorithm.
+data ScanLine = ScanLine {
+    sSegments :: !(M.Map Segment Trapezoid) -- ^ Line segments that intersect the current scan line.
+  , sDiagonals :: !(IM.IntMap [Int])        -- ^ Extra diagonals that have been added during trapezoidation.
+} deriving (Eq, Ord, Show)
+
+-- | Information about an unclosed trapezoid.
+data Trapezoid = Trapezoid {
+    tStart :: !Int         -- ^ The leftmost point of the trapezoid.
+  , tSegment1 :: !Segment  -- ^ The line segment that marks the upper boundary of this trapezoid.
+  , tSegment2 :: !Segment  -- ^ The line segment that marks the lower boundary of this trapezoid.
+} deriving (Eq, Ord, Show)
+
+-- | Information about the two points on the polygon that are adjacent to some
+-- other point.
+data AdjacentPoints = TwoOnRight !Int !Int        -- ^ The two points are to the right of the original point.
+                     | OneLeftOneRight !Int !Int  -- ^ The two points are on either side of the original point.  They are ordered left to right.
+                     | TwoOnLeft !Int !Int        -- ^ The two points are to the left of the other original point.
+                     deriving (Eq, Ord, Show)
+
 -- | Triangulate a simple polygon described by a 'Path'. The path must be
 -- validated by 'isValidSimplePolygon', otherwise 'triangulate' will return
 -- incorrect results or throw an exception. If the path has less than 3 vertices
@@ -214,70 +242,167 @@ triangulate []        = []
 triangulate [_]       = []
 triangulate [_, _]    = []
 triangulate [_, _, _] = [(0, 1, 2)]
-triangulate path      = concat
-  $ evalState (traverse doTriangulation sortedPoints) initState
+triangulate path =
+  concat $ evalState (traverse doTriangulation sortedPoints) $ ScanLine
+    M.empty
+    IM.empty
  where
-  -- The initial state includes a diagonal from the last vertex back to the
-  -- start. This simplifies the windPolygon function.
-  initState  = Trapezoidation M.empty M.empty
+  makeSegment i j =
+    let a = indexedPath ! i
+        b = indexedPath ! j
+    in  if a <= b then Segment a b else Segment b a
+  endYCoord (Segment _ (Point _ y)) = y
   pathLength = length path
   prev i = (i + pathLength - 1) `mod` pathLength
   next i = (i + 1) `mod` pathLength
   indexedPath  = listArray (0, pathLength - 1) path
   sortedPoints = sortOn (indexedPath !) [0 .. pathLength - 1]
-  hasDiagonal a b = next a == b || next b == a
+  isAdjacent a b = next a == b || next b == a
 
-  -- Determine if a point is inside a trapezoid.
-  isInsideTrapezoid :: Point -> Trapezoid -> Bool
-  isInsideTrapezoid (Point x y) Trapezoid {..} =
-    let
-      Point x0 _ = indexedPath ! tStart
-      leftMost   = minimumBy (comparing (indexedPath !))
-      Point ax0 ay0 =
-        indexedPath ! leftMost [prev tSegment1, next tSegment1, tStart]
-      Point ax1 ay1 = indexedPath ! tSegment1
-      Point bx0 by0 =
-        indexedPath ! leftMost [prev tSegment2, next tSegment2, tStart]
-      Point bx1 by1 = indexedPath ! tSegment2
-      p1            = (x - ax0) / (ax1 - ax0)
-      p2            = (x - bx0) / (bx1 - bx0)
-      ya            = (ay1 - ay0) * p1 + ay0
-      yb            = (by1 - by0) * p2 + by0
-    in
-      assert (x >= x0 && x <= ax1 && x <= bx1)
-      $  (ya < y && y < yb)
-      || (yb < y && y < ya)
+  -- | Given the index of a point, find the two adjacent points.
+  getAdjacentPoints :: Int -> AdjacentPoints
+  getAdjacentPoints i =
+    let (i1, i2)     = (prev i, next i)
+        (pc, p1, p2) = (indexedPath ! i, indexedPath ! i1, indexedPath ! i2)
+    in  if
+          | p1 <= pc && pc <= p2 -> OneLeftOneRight i1 i2
+          | p2 <= pc && pc <= p1 -> OneLeftOneRight i2 i1
+          | p1 <= pc && p2 <= pc -> TwoOnLeft i1 i2
+          | otherwise            -> TwoOnRight i1 i2
 
-  -- Get and remove the trapezoid that this point is inside of, or return
-  -- Nothing if there is no such trapezoid.
-  getEnclosingTrapezoid :: Point -> State Trapezoidation (Maybe Trapezoid)
-  getEnclosingTrapezoid pt = do
-    mtz <- find (pt `isInsideTrapezoid`) . concat . toList <$> gets trapezoids
-    case mtz of
-      Nothing -> pure Nothing
-      Just tz -> do
-        modify (\s -> s { trapezoids = removeTrapezoid (trapezoids s) tz })
-        pure $ Just tz
+  -- | Given a point, get the trapezoid (if any) that this point lines inside of.
+  getEnclosingTrapezoid :: Int -> State ScanLine (Maybe Trapezoid)
+  getEnclosingTrapezoid i = do
+    segments <- gets sSegments
+    let s     = makeSegment i i
+    let above = snd <$> M.lookupLE s segments
+    let below = snd <$> M.lookupGE s segments
+    pure $ do
+      tAbove <- above
+      tBelow <- below
+      if tAbove == tBelow then Just tAbove else Nothing
+
+  -- | Perform one round of the scan-line algorithm from the given point.
+  doTriangulation :: Int -> State ScanLine [Triangle]
+  doTriangulation i = case getAdjacentPoints i of
+    TwoOnRight i1 i2 -> do
+      mEnclosing <- getEnclosingTrapezoid i
+      case mEnclosing of
+        Nothing ->
+          -- A completely new trapezoid.
+          addTrapezoid $ Trapezoid i (makeSegment i i1) (makeSegment i i2)
+        Just Trapezoid {..} -> do
+          -- Point i lies inside some other trapezoid, so split that trapezoid in two.
+          let (iTop, iBottom) = sortVertical (i1, i2)
+          let [sTop, sBottom] = sortOn endYCoord [tSegment1, tSegment2]
+          addDiagonal tStart i
+          addTrapezoid $ Trapezoid i sTop (makeSegment i iTop)
+          addTrapezoid $ Trapezoid i sBottom (makeSegment i iBottom)
+      pure []
+
+    TwoOnLeft i1 i2 -> do
+      let s1 = makeSegment i i1
+      let s2 = makeSegment i i2
+      t1 <- getTrapezoid s1
+      t2 <- getTrapezoid s2
+
+      -- Since we scan left to right, we must have already seen both of these
+      -- line segments, so getTrapezoid will always return a Just value.
+      assert (isJust t1) $ pure ()
+      assert (isJust t2) $ pure ()
+      let tz1 = fromJust t1
+      let tz2 = fromJust t2
+
+      -- If the two trapezoids are the same then we're done. Close the last
+      -- trapezoid and wind the final polygon.
+      unitonePolygons <- if tz1 == tz2
+        then catMaybes <$> sequence
+          [ closeTrapezoid (tStart tz1) i
+          , Just <$> if next i == i1 then windPolygon i i1 else windPolygon i1 i
+          ]
+        else do
+          -- Otherwise we're merging two trapezoids. Create a new trapezoid with
+          -- the two line segments that aren't complete yet (the two line
+          -- segments not equal to s1 or s2)
+          addTrapezoid $ Trapezoid
+            i
+            (if s1 == tSegment1 tz1 || s2 == tSegment1 tz1
+              then tSegment2 tz1
+              else tSegment1 tz1
+            )
+            (if s1 == tSegment1 tz2 || s2 == tSegment1 tz2
+              then tSegment2 tz2
+              else tSegment1 tz2
+            )
+          catMaybes <$> sequence
+            [closeTrapezoid (tStart tz1) i, closeTrapezoid (tStart tz2) i]
+
+      pure . concat $ triangulateUnitone <$> unitonePolygons
+
+    OneLeftOneRight l r -> do
+      let oldSegment = makeSegment l i
+      mtz <- getTrapezoid oldSegment
+
+      -- Since we scan left to right, we must have already seen oldSegment, so
+      -- getTrapezoid must return a Just value.
+      assert (isJust mtz) $ pure ()
+      let tz = fromJust mtz
+
+      addTrapezoid $ Trapezoid
+        i
+        (makeSegment i r)
+        (if tSegment1 tz == oldSegment then tSegment2 tz else tSegment1 tz)
+
+      maybe [] triangulateUnitone <$> closeTrapezoid (tStart tz) i
+
+  -- Sort two vertices in order of their y coordinates.
+  sortVertical :: (Int, Int) -> (Int, Int)
+  sortVertical (a, b) =
+    let Point xa ya = indexedPath ! a
+        Point xb yb = indexedPath ! b
+    in  if (ya, xb) <= (yb, xa) then (a, b) else (b, a)
+
+  -- Add a diagonal across the polygon.
+  addDiagonal :: Int -> Int -> State ScanLine ()
+  addDiagonal d1 d2 = modify $ \s -> s
+    { sDiagonals = insertMapList d2 d1 . insertMapList d1 d2 $ sDiagonals s
+    }
+    where insertMapList k v = IM.alter (\l -> ((v :) <$> l) <|> Just [v]) k
+
+  -- Add a trapezoid to the current state.
+  addTrapezoid :: Trapezoid -> State ScanLine ()
+  addTrapezoid t@Trapezoid {..} = modify $ \s -> s
+    { sSegments = M.insert tSegment1 t $ M.insert tSegment2 t $ sSegments s
+    }
+
+  -- Get the trapezoid associated with a line segment and remove it from the
+  -- current state.
+  getTrapezoid :: Segment -> State ScanLine (Maybe Trapezoid)
+  getTrapezoid segment = do
+    s <- get
+    let r = M.lookup segment $ sSegments s
+    put $ s { sSegments = M.delete segment $ sSegments s }
+    pure r
 
   -- If this trapezoid can be closed, then add a diagonal and carve off a
   -- uni-monotone polygon for triangulation. If this trapezoid cannot be closed
-  -- then return an empty list.
-  closeTrapezoid :: Trapezoid -> Int -> State Trapezoidation [(Int, Point)]
-  closeTrapezoid Trapezoid {..} i = if hasDiagonal tStart i
-    then pure []
+  -- then return Nothing.
+  closeTrapezoid :: Int -> Int -> State ScanLine (Maybe [(Int, Point)])
+  closeTrapezoid start i = if isAdjacent start i
+    then pure Nothing
     else do
-      let (d1, d2) = sortVertical (tStart, i)
+      let (d1, d2) = sortVertical (start, i)
       addDiagonal d2 d1
-      windPolygon d2 d1
+      Just <$> windPolygon d2 d1
 
   -- Given a line segment directed anticlockwise, extract the polygon by walking
   -- around its perimeter.
-  windPolygon :: Int -> Int -> State Trapezoidation [(Int, Point)]
+  windPolygon :: Int -> Int -> State ScanLine [(Int, Point)]
   windPolygon i0 i1 = do
-    allDiagonals <- gets diagonals
+    allDiagonals <- gets sDiagonals
     let closestToi0 =
           minimumBy (comparing $ \d -> (i0 - d + pathLength) `mod` pathLength)
-    let nextCandidates i = next i : M.findWithDefault [] i allDiagonals
+    let nextCandidates i = next i : IM.findWithDefault [] i allDiagonals
 
     -- Make sure we have at least 3 distinct points.
     let i2 = closestToi0 . filter (/= i0) $ nextCandidates i1
@@ -293,174 +418,6 @@ triangulate path      = concat
       : (i1, indexedPath ! i1)
       : (i2, indexedPath ! i2)
       : winding
-
-  -- Sort two vertices in order of their y coordinates.
-  sortVertical :: (Int, Int) -> (Int, Int)
-  sortVertical (a, b) =
-    let Point xa ya = indexedPath ! a
-        Point xb yb = indexedPath ! b
-    in  if (ya, xb) <= (yb, xa) then (a, b) else (b, a)
-
-  -- Sort two vertices lexicographically by their coordinates.
-  geoSort :: (Int, Int) -> (Int, Int)
-  geoSort (a, b) =
-    if indexedPath ! a <= indexedPath ! b then (a, b) else (b, a)
-
-  -- Triangulate up to the given vertex.
-  doTriangulation :: Int -> State Trapezoidation [Triangle]
-  doTriangulation i = do
-    allTrapezoids <- getTrapezoids i
-    case allTrapezoids of
-      [] -> do
-        mtz <- getEnclosingTrapezoid (indexedPath ! i)
-        case mtz of
-          Nothing -> do
-            -- Create a new trapezoid.
-            let (s1, s2) = geoSort (next i, prev i)
-            addTrapezoid $ Trapezoid i s1 s2
-            pure []
-          Just tz -> do
-            -- Split an existing trapezoid.
-            let (s1, s4) = sortVertical (tSegment1 tz, tSegment2 tz)
-            let (s2, s3) = sortVertical (next i, prev i)
-            let (u1, u2) = geoSort (s1, s2) -- points for the upper trapezoid.
-            let (l1, l2) = geoSort (s3, s4) -- points for the lower trapezoid.
-
-            addDiagonal (tStart tz) i
-            addTrapezoid $ Trapezoid i u1 u2
-            addTrapezoid $ Trapezoid i l1 l2
-            pure []
-
-      tz1 : rest -> do
-        -- We always process tSegment1 first.
-        assert (i == tSegment1 tz1) $ pure ()
-
-        -- There are never more than two trapezoids to consider.
-        assert (length rest <= 1) $ pure ()
-
-        -- If there are two trapezoids, then neither trapezoid is degenerate.
-        assert
-            (  null rest
-            || (  (tSegment1 tz1 /= tSegment2 tz1)
-               && ((tSegment1 $ head rest) /= (tSegment2 $ head rest))
-               )
-            )
-          $ pure ()
-
-        -- Get up to two possible uni-monotone polygons by closing off the
-        -- current trapezoid(s).
-        unitonePolygons <- case rest of
-          [tz2] -> do
-            -- Create the next trapezoid by merging the two current trapezoids.
-            let (s1, s2) = geoSort (tSegment2 tz1, tSegment2 tz2)
-            addTrapezoid $ Trapezoid (tSegment1 tz1) s1 s2
-
-            -- Close the trapezoids. No degenerate cases to consider here.
-            sequence [closeTrapezoid tz1 i, closeTrapezoid tz2 i]
-
-          [] -> if tSegment1 tz1 /= tSegment2 tz1
-            then do
-              -- This is the normal case. Create the next trapezoid then close
-              -- the previous one.
-              let start = tSegment1 tz1
-              let
-                (s1, s2) = geoSort
-                  (tSegment2 tz1, snd $ geoSort (next start, prev start))
-              addTrapezoid $ Trapezoid start s1 s2
-
-              sequence [closeTrapezoid tz1 i]
-            else do
-              -- Handle the degenerate case where tSegment1 == tSegment2.
-              -- Attempt to close the current polygon first, then wind up the
-              -- final polygon.
-              let (d1, d2) = (tStart tz1, tSegment1 tz1)
-              let (i0, i1) = if next d1 == d2 then (d1, d2) else (d2, d1)
-              sequence [closeTrapezoid tz1 i, windPolygon i0 i1]
-
-          tooManyTrapezoids -> do
-            s <- get
-            error
-              $  "Too many trapezoids: "
-              ++ show tooManyTrapezoids
-              ++ ".  Full state was "
-              ++ show s
-              ++ " from the original path "
-              ++ show path
-
-        -- Assert that there are no infinite loops in the generated polygons.
-        assert
-            (all (\p -> length (take (pathLength + 1) p) <= pathLength)
-                 unitonePolygons
-            )
-          $ pure ()
-
-        -- Triangulate the polygons.
-        pure
-          .   concat
-          $   triangulateUnitone
-          <$> filter (not . null) unitonePolygons
-
-  -- Add a diagonal across the polygon.
-  addDiagonal :: Int -> Int -> State Trapezoidation ()
-  addDiagonal d1 d2 = modify $ \ts ->
-    ts { diagonals = insertMapList d2 d1 . insertMapList d1 d2 $ diagonals ts }
-    where insertMapList k v = M.alter (\l -> ((v :) <$> l) <|> Just [v]) k
-
-  -- Add a trapezoid to the current trapezoidation state.
-  addTrapezoid :: Trapezoid -> State Trapezoidation ()
-  addTrapezoid tz@Trapezoid {..} = modify $ \ts -> ts
-    { trapezoids = M.unionWith (++) (trapezoids ts)
-                     $ M.fromList [(tSegment1, [tz]), (tSegment2, [tz])]
-    }
-
-  -- Get and remove all trapezoids with a line segment ending at a specified
-  -- point.
-  getTrapezoids :: Int -> State Trapezoidation [Trapezoid]
-  getTrapezoids i = do
-    tzs <- gets trapezoids
-    case M.lookup i tzs of
-      Nothing              -> pure []
-      Just foundTrapezoids -> do
-        modify $ \s ->
-          s { trapezoids = foldl' removeTrapezoid tzs foundTrapezoids }
-        pure foundTrapezoids
-
-  -- Completely remove a trapezoid from the trapezoid list
-  removeTrapezoid :: M.IntMap [Trapezoid] -> Trapezoid -> M.IntMap [Trapezoid]
-  removeTrapezoid tzs tz@Trapezoid {..} =
-    M.alter doRemoveTrapezoid tSegment2
-      . M.alter doRemoveTrapezoid tSegment1
-      $ tzs
-   where
-    doRemoveTrapezoid mltz = case mltz of
-      Nothing -> Nothing
-      Just ltz ->
-        let ltz' = delete tz ltz in if null ltz' then Nothing else Just ltz'
-
--- | Current state of the trapezoidation calculation. The incomplete trapezoids
--- are indexed by their two neighbours, which means that each trapezoid is
--- indexed twice. When we remove a trapezoid we must be careful to also remove
--- its copy.
---
--- The diagonals are stored as an adjacency list. Each point maps to a list of
--- diagonals starting at that point.
-data Trapezoidation = Trapezoidation {
-    trapezoids :: !(M.IntMap [Trapezoid])  -- ^ Incomplete trapezoids.
-  , diagonals :: !(M.IntMap [Int])         -- ^ Extra diagonals that have been added during trapezoidation.
-} deriving (Eq, Ord, Show)
-
--- | Information about an incomplete trapezoid. The trapezoid is defined by the
--- vertex that introduced the trapezoid and two points that terminate the line
--- segments that form the top and bottom of the trapezoid. The terminating
--- vertices are lexicographically ordered.
--- 
--- The trapezoid will be complete when we process one of the two terminating
--- vertices.
-data Trapezoid = Trapezoid {
-    tStart :: !Int     -- ^ The first vertex we saw in this trapezoid.
-  , tSegment1 :: !Int  -- ^ The first terminating vertex.
-  , tSegment2 :: !Int  -- ^ The second terminating vertex.
-} deriving (Eq, Ord, Show)
 
 -- | Triangulate a uni-monotone polygon. The input points are augmented with
 -- their indices in the original path.
